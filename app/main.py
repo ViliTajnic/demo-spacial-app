@@ -27,8 +27,8 @@ from simulator import (
 )
 
 
-st.set_page_config(page_title="Sentinel EU Demo", layout="wide")
-st.title("Sentinel EU Monitoring Demo")
+st.set_page_config(page_title="Tracking EU Demo", layout="wide")
+st.title("Tracking EU Monitoring Demo")
 st.caption("Oracle DB + Local/OCI GenAI demo with EU-focused location data")
 
 
@@ -946,8 +946,8 @@ with st.sidebar:
         oci_compartment_ocid = st.text_input("OCI Compartment OCID", value="")
         oci_config_file = st.text_input("OCI Config File", value="~/.oci/config")
         oci_config_profile = st.text_input("OCI Config Profile", value="DEFAULT")
-        db_user = st.text_input("Oracle User", value="sentinel")
-        db_password = st.text_input("Oracle Password", value="SentinelPwd123", type="password")
+        db_user = st.text_input("Oracle User", value="tracking")
+        db_password = st.text_input("Oracle Password", value="TrackingPwd123", type="password")
         db_dsn = st.text_input("Oracle DSN", value="localhost:1521/FREEPDB1")
 
 settings = {

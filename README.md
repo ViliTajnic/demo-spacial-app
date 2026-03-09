@@ -1,4 +1,4 @@
-# Sentinel EU Demo App
+# Tracking EU Demo App
 
 Demo app for offender/location monitoring with:
 - EU-focused location telemetry simulation (or Kaggle GPX upload)
@@ -22,7 +22,7 @@ Demo app for offender/location monitoring with:
 - `app/llm_client.py`: local Ollama / OCI GenAI switch
 - `sql/schema_oracle_26ai.sql`: baseline Oracle persistence tables
 - `sql/schema_oracle_26ai_converged.sql`: Oracle 26ai Spatial + Vector schema for the presentation demo
-- `sql/create_sentinel_user.sql`: dedicated Oracle app user/schema bootstrap
+- `sql/create_tracking_user.sql`: dedicated Oracle app user/schema bootstrap
 
 ## Option A: Run Locally (No Docker)
 
@@ -77,19 +77,19 @@ ollama pull gpt-oss:20b
 Create the dedicated app user/schema first:
 
 ```bash
-docker exec -i oracle26ai sqlplus system/OraclePwd123@localhost:1521/FREEPDB1 < sql/create_sentinel_user.sql
+docker exec -i oracle26ai sqlplus system/OraclePwd123@localhost:1521/FREEPDB1 < sql/create_tracking_user.sql
 ```
 
-Then create the app tables inside the `SENTINEL` schema:
+Then create the app tables inside the `TRACKING` schema:
 
 ```bash
-docker exec -i oracle26ai sqlplus sentinel/SentinelPwd123@localhost:1521/FREEPDB1 < sql/schema_oracle_26ai.sql
+docker exec -i oracle26ai sqlplus tracking/TrackingPwd123@localhost:1521/FREEPDB1 < sql/schema_oracle_26ai.sql
 ```
 
 For the full presentation demo with Oracle 26ai Spatial + Vector tables:
 
 ```bash
-docker exec -i oracle26ai sqlplus sentinel/SentinelPwd123@localhost:1521/FREEPDB1 < sql/schema_oracle_26ai_converged.sql
+docker exec -i oracle26ai sqlplus tracking/TrackingPwd123@localhost:1521/FREEPDB1 < sql/schema_oracle_26ai_converged.sql
 ```
 
 Or use the Streamlit buttons:
@@ -100,8 +100,8 @@ Or use the Streamlit buttons:
 If your Oracle image/service differs, update:
 - `ORACLE_IMAGE`
 - `ORACLE_DSN`
-- `ORACLE_USER` (default: `sentinel`)
-- `ORACLE_PASSWORD` (default: `SentinelPwd123`)
+- `ORACLE_USER` (default: `tracking`)
+- `ORACLE_PASSWORD` (default: `TrackingPwd123`)
 
 ## LLM Provider Configuration
 
