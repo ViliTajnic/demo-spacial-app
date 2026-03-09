@@ -1,0 +1,8 @@
+streamlit>=1.41.0
+pandas>=2.2.0
+numpy>=1.26.0
+pydeck>=0.9.1
+gpxpy>=1.6.2
+oracledb>=2.4.1
+oci>=2.140.0
+requests>=2.32.0
