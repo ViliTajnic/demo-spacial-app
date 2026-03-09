@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import math
+from urllib.parse import quote
 
 import pandas as pd
 import pydeck as pdk
@@ -131,6 +132,12 @@ def ensure_state(participant_options: list[str]) -> None:
         st.session_state["pending_selected_participant"] = None
     if "pending_anomaly_focus_label" not in st.session_state:
         st.session_state["pending_anomaly_focus_label"] = None
+    if "focus_counterpart" not in st.session_state:
+        st.session_state["focus_counterpart"] = None
+    if "pending_focus_counterpart" not in st.session_state:
+        st.session_state["pending_focus_counterpart"] = None
+    if "viewed_escalation_keys" not in st.session_state:
+        st.session_state["viewed_escalation_keys"] = []
 
 
 def make_anomaly_table(alerts: pd.DataFrame, coloc: pd.DataFrame) -> pd.DataFrame:
@@ -204,12 +211,17 @@ def apply_anomaly_selection(anomaly_df: pd.DataFrame, selected_rows: list[int]) 
         st.session_state["selected_anomaly_key"] = "None"
         st.session_state["anomaly_focus_label"] = ""
         st.session_state["applied_anomaly_focus_key"] = "None"
+        st.session_state["focus_counterpart"] = None
         st.session_state["focus_selected_on_map"] = False
         return
     if selected_anomaly_key != st.session_state.get("applied_anomaly_focus_key"):
         st.session_state["selected_anomaly_key"] = selected_anomaly_key
         st.session_state["applied_anomaly_focus_key"] = selected_anomaly_key
-        request_participant_focus(anomaly_entry["participant_id"], label=anomaly_entry["label"])
+        request_participant_focus(
+            anomaly_entry["participant_id"],
+            label=anomaly_entry["label"],
+            counterpart=resolve_focus_counterpart(anomaly_entry),
+        )
         st.rerun()
 
 
@@ -320,25 +332,59 @@ def build_incident_queue(alerts: pd.DataFrame, coloc: pd.DataFrame, hybrid_decis
 
 
 def render_escalation_banners(incident_df: pd.DataFrame) -> None:
-    banner_df = incident_df[incident_df["severity"].isin(["CRITICAL", "HIGH"])].head(3)
+    banner_df = incident_df[incident_df["severity"].isin(["CRITICAL", "HIGH"])].copy()
     if banner_df.empty:
         return
 
-    st.subheader("Operator Escalations")
-    for _, row in banner_df.iterrows():
-        tone = "#7f1d1d" if row["severity"] == "CRITICAL" else "#78350f"
-        border = "#ef4444" if row["severity"] == "CRITICAL" else "#f59e0b"
-        counterpart = f" · Counterpart: {row['counterpart']}" if row["counterpart"] else ""
-        html = (
-            f"<div style='padding:14px 16px;border-radius:10px;margin-bottom:10px;"
-            f"border-left:8px solid {border};background:{tone};'>"
-            f"<strong>{row['severity']} · {row['incident_type']}</strong><br/>"
-            f"Subject: {row['subject']}{counterpart}<br/>"
-            f"Decision: {row['decision']} · Pattern: {row['pattern']}<br/>"
-            f"{row['details']}"
-            f"</div>"
-        )
-        st.markdown(html, unsafe_allow_html=True)
+    active_keys = set(banner_df["key"].astype(str).tolist())
+    viewed_keys = [key for key in st.session_state.get("viewed_escalation_keys", []) if key in active_keys]
+    st.session_state["viewed_escalation_keys"] = viewed_keys
+
+    active_banner_df = banner_df[~banner_df["key"].astype(str).isin(viewed_keys)].head(3)
+    viewed_banner_df = banner_df[banner_df["key"].astype(str).isin(viewed_keys)].head(10)
+
+    header_left, header_right = st.columns([5, 1])
+    with header_left:
+        st.subheader("Operator Escalations")
+        st.caption("Click a warning card to center and zoom the live map on that subject and mark it as viewed.")
+    with header_right:
+        if viewed_keys and st.button("Clear viewed", key="clear_viewed_escalations", use_container_width=True):
+            st.session_state["viewed_escalation_keys"] = []
+            st.rerun()
+
+    if active_banner_df.empty:
+        st.info("All current escalation warnings are marked as viewed.")
+    else:
+        for idx, row in active_banner_df.reset_index(drop=True).iterrows():
+            label = row.get("label") if hasattr(row, "get") else None
+            if not label:
+                label = f"{row['severity']} | {row['incident_type']} | {row['participant_id']} | {row['decision']}"
+            counterpart = f" · Counterpart: {row['counterpart']}" if row["counterpart"] else ""
+            icon = "🔴" if row["severity"] == "CRITICAL" else "🟠"
+            card_text = "\n".join(
+                [
+                    f"{icon} {row['severity']} · {row['incident_type']}",
+                    f"Subject: {row['subject']}{counterpart}",
+                    f"Decision: {row['decision']} · Pattern: {row['pattern']}",
+                    f"{row['details']}",
+                ]
+            )
+            if st.button(card_text, key=f"escalation_card_{idx}_{row['key']}", use_container_width=True):
+                st.session_state["viewed_escalation_keys"] = viewed_keys + [str(row["key"])]
+                request_participant_focus(
+                    str(row["participant_id"]),
+                    label=str(label),
+                    counterpart=resolve_focus_counterpart(row),
+                )
+                st.rerun()
+
+    if not viewed_banner_df.empty:
+        with st.expander(f"Viewed warnings ({len(viewed_banner_df)})", expanded=False):
+            for _, row in viewed_banner_df.reset_index(drop=True).iterrows():
+                counterpart = f" · Counterpart: {row['counterpart']}" if row["counterpart"] else ""
+                st.caption(
+                    f"{row['severity']} · {row['incident_type']} · Subject: {row['subject']}{counterpart} · {row['details']}"
+                )
 
 
 def render_test_trigger_panel(participant_options: list[str]) -> None:
@@ -395,11 +441,18 @@ def render_test_trigger_panel(participant_options: list[str]) -> None:
 
 
 
-def request_participant_focus(participant_id: str, label: str | None = None, clear_anomaly: bool = False) -> None:
+def request_participant_focus(
+    participant_id: str,
+    label: str | None = None,
+    clear_anomaly: bool = False,
+    counterpart: str | None = None,
+) -> None:
     st.session_state["pending_selected_participant"] = participant_id
+    st.session_state["pending_focus_counterpart"] = counterpart or None
     st.session_state["focus_selected_on_map"] = True
     if clear_anomaly:
         st.session_state["pending_anomaly_focus_label"] = ""
+        st.session_state["pending_focus_counterpart"] = None
         st.session_state["applied_anomaly_focus_key"] = "None"
     elif label is not None:
         st.session_state["pending_anomaly_focus_label"] = label
@@ -410,11 +463,23 @@ def apply_pending_participant_focus() -> None:
     if not pending:
         return
     st.session_state["selected_participant"] = pending
+    st.session_state["focus_counterpart"] = st.session_state.get("pending_focus_counterpart")
     pending_label = st.session_state.get("pending_anomaly_focus_label")
     if pending_label is not None:
         st.session_state["anomaly_focus_label"] = pending_label
         st.session_state["pending_anomaly_focus_label"] = None
     st.session_state["pending_selected_participant"] = None
+    st.session_state["pending_focus_counterpart"] = None
+
+def resolve_focus_counterpart(entry: dict | pd.Series) -> str | None:
+    participant_id = str(entry.get("participant_id", "") or "")
+    subject = str(entry.get("subject", "") or "")
+    counterpart = str(entry.get("counterpart", "") or "")
+    if counterpart and counterpart != participant_id:
+        return counterpart
+    if subject and subject != participant_id:
+        return subject
+    return None
 
 def set_incident_filter(mode: str, value: str) -> None:
     st.session_state["incident_filter_mode"] = mode
@@ -515,6 +580,28 @@ def render_overview_banner(scenario_mode: str, workspace: str) -> None:
     c2.caption(f"Workspace: `{workspace}`")
 
 
+def build_map_label_icon(participant_id: str, highlighted: bool = False) -> dict:
+    width = max(74, 18 + len(participant_id) * 8)
+    height = 24
+    fill = "#f6c244" if highlighted else "#111827"
+    stroke = "#f6c244" if highlighted else "#e5e7eb"
+    text_color = "#111827" if highlighted else "#ffffff"
+    svg = (
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}'>"
+        f"<rect x='1.5' y='1.5' rx='10' ry='10' width='{width - 3}' height='{height - 3}' fill='{fill}' fill-opacity='0.96' stroke='{stroke}' stroke-width='2'/>"
+        f"<text x='{width / 2}' y='16' text-anchor='middle' font-family='Arial, Helvetica, sans-serif' font-size='11' font-weight='700' fill='{text_color}'>{participant_id}</text>"
+        f"</svg>"
+    )
+    return {
+        "url": f"data:image/svg+xml;charset=utf-8,{quote(svg)}",
+        "width": width,
+        "height": height,
+        "anchorY": height // 2,
+        "anchorX": width // 2,
+        "mask": False,
+    }
+
+
 def render_live_map(latest: pd.DataFrame, *, title: str, key: str, focus_selected: bool = True) -> None:
     latest = latest.copy()
     latest["marker_radius"] = latest["participant_id"].apply(
@@ -525,6 +612,15 @@ def render_live_map(latest: pd.DataFrame, *, title: str, key: str, focus_selecte
         if participant_id == st.session_state["selected_participant"]
         else [220, 60, 50, 180]
     )
+    latest["label_icon"] = latest["participant_id"].apply(
+        lambda participant_id: build_map_label_icon(
+            str(participant_id),
+            highlighted=participant_id == st.session_state["selected_participant"],
+        )
+    )
+    latest["label_size"] = latest["participant_id"].apply(
+        lambda participant_id: 78 if participant_id == st.session_state["selected_participant"] else 70
+    )
 
     st.subheader(title)
     selected_latest = latest[latest["participant_id"] == st.session_state["selected_participant"]]
@@ -534,14 +630,26 @@ def render_live_map(latest: pd.DataFrame, *, title: str, key: str, focus_selecte
     center_lon = float(latest["lon"].mean())
     max_span = max(lat_span, lon_span)
     default_zoom = min(6.2, max(3.2, 7.6 - math.log(max_span + 1.0, 2)))
+    focus_counterpart = st.session_state.get("focus_counterpart")
+    counterpart_latest = latest[latest["participant_id"] == focus_counterpart] if focus_counterpart else latest.iloc[0:0]
     if focus_selected and st.session_state["focus_selected_on_map"] and not selected_latest.empty:
-        focus_row = selected_latest.iloc[0]
-        center_lat = float(focus_row["lat"])
-        center_lon = float(focus_row["lon"])
-        zoom = 10.5
+        if focus_counterpart and not counterpart_latest.empty:
+            pair_rows = pd.concat([selected_latest.head(1), counterpart_latest.head(1)], ignore_index=True)
+            center_lat = float(pair_rows["lat"].mean())
+            center_lon = float(pair_rows["lon"].mean())
+            pair_lat_span = abs(float(pair_rows["lat"].max() - pair_rows["lat"].min()))
+            pair_lon_span = abs(float(pair_rows["lon"].max() - pair_rows["lon"].min()))
+            pair_span = max(pair_lat_span, pair_lon_span, 0.0025)
+            zoom = min(13.5, max(10.8, 13.9 - math.log(pair_span * 2500, 2)))
+        else:
+            focus_row = selected_latest.iloc[0]
+            center_lat = float(focus_row["lat"])
+            center_lon = float(focus_row["lon"])
+            zoom = 10.5
     else:
         zoom = default_zoom
 
+    map_key = f"{key}:{st.session_state['selected_participant']}:{focus_counterpart or '-'}:{int(st.session_state.get('focus_selected_on_map', False))}"
     map_event = st.pydeck_chart(
         pdk.Deck(
             map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
@@ -561,6 +669,19 @@ def render_live_map(latest: pd.DataFrame, *, title: str, key: str, focus_selecte
                     stroked=True,
                     pickable=True,
                     auto_highlight=True,
+                ),
+                pdk.Layer(
+                    "IconLayer",
+                    id="participant-labels",
+                    data=latest,
+                    get_icon="label_icon",
+                    get_position="[lon, lat]",
+                    get_size="label_size",
+                    size_scale=1,
+                    size_units="pixels",
+                    get_pixel_offset=[0, -26],
+                    billboard=True,
+                    pickable=False,
                 )
             ],
             tooltip={"text": "Participant: {participant_id}\nCity: {city}\nLat/Lon: {lat}, {lon}"},
@@ -569,7 +690,7 @@ def render_live_map(latest: pd.DataFrame, *, title: str, key: str, focus_selecte
         height=480,
         on_select="rerun",
         selection_mode="single-object",
-        key=key,
+        key=map_key,
     )
     selected_objects = map_event.get("selection", {}).get("objects", {}).get("latest-positions", []) if map_event else []
     if selected_objects:
@@ -598,6 +719,7 @@ def render_subject_selector(participant_options: list[str], label: str = "Select
         key="selected_participant",
         help="Click a marker on the map, an anomaly row, or choose a participant here.",
     )
+    st.session_state["focus_counterpart"] = None
     st.session_state["focus_selected_on_map"] = True
     return selected
 
@@ -708,7 +830,7 @@ def render_operations_center(dataset: dict, participant_options: list[str], sett
 
     top_left, top_mid, top_right = st.columns([1.35, 1, 1])
     with top_left:
-        render_live_map(filtered_latest, title="Live Map", key="ops_live_map", focus_selected=not bool(scoped_participants))
+        render_live_map(filtered_latest, title="Live Map", key="ops_live_map", focus_selected=True)
         if st.session_state.get("incident_filter_mode", "all") != "all":
             st.caption(f"Map scope: `{st.session_state.get('incident_filter_value', 'All incidents')}`")
     with top_mid:
