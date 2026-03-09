@@ -8,6 +8,10 @@ Demo app for offender/location monitoring with:
 - optional Oracle DB persistence
 - template-based synthetic generation from uploaded GPX waypoint/track files
 
+## Version Documentation
+
+- `v0.1.0`: see `docs/v0.1.0.md`
+
 ## Project Structure
 
 - `app/main.py`: Streamlit UI
