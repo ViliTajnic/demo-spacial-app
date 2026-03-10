@@ -6,3 +6,5 @@ __pycache__/
 .streamlit/secrets.toml
 SESSION_PROGRESS.md
 docs/
+start_app.py
+stop_app.py
